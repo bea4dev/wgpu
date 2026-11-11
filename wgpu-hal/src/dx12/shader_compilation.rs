@@ -42,6 +42,14 @@ pub(super) enum GetContainerError {
 }
 
 impl CompilerContainer {
+    pub(super) fn name(&self) -> &'static str {
+        match self {
+            Self::Fxc(_) => "fxc",
+            Self::DynamicDxc(_) => "dynamic-dxc",
+            Self::StaticDxc(_) => "static-dxc",
+        }
+    }
+
     pub(super) fn new_fxc() -> Result<Self, GetContainerError> {
         FxcLib::new_dynamic().map(|fxc| Self::Fxc(CompilerFxc { fxc }))
     }

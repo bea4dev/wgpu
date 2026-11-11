@@ -171,6 +171,11 @@ impl crate::Instance for super::Instance {
 
         adapters
             .into_iter()
+            .filter(|raw| {
+                let luid = unsafe { raw.GetDesc1() }.unwrap().AdapterLuid;
+                let luid = ((luid.HighPart as u32 as u64) << 32) | u64::from(luid.LowPart);
+                self.options.adapter_filter.allows(luid)
+            })
             .filter_map(|raw| {
                 super::Adapter::expose(
                     raw,

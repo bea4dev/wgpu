@@ -42,6 +42,13 @@ Bottom level categories:
 
 ## Unreleased
 
+### New Features
+
+#### DX12
+
+- Add `Dx12BackendOptions::adapter_filter` to expose only some adapters. Exposing an adapter creates a device on it, which powers up a sleeping discrete GPU.
+- Support `PipelineCache` on DX12. It keeps compiled shaders, so that a later process can skip FXC or DXC.
+
 ## v30.0.1 (2026-08-21)
 
 ### Bug Fixes

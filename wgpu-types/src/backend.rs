@@ -1,6 +1,6 @@
 //! [`Backend`], [`Backends`], and backend-specific options.
 
-use alloc::string::String;
+use alloc::{string::String, vec::Vec};
 use core::{hash::Hash, str::FromStr};
 
 #[cfg(any(feature = "serde", test))]
@@ -555,6 +555,8 @@ pub struct Dx12BackendOptions {
     /// Can also be set via `WGPU_DX12_AGILITY_SDK_PATH` and `WGPU_DX12_AGILITY_SDK_VERSION`
     /// environment variables.
     pub agility_sdk: Option<Dx12AgilitySDK>,
+    /// Which adapters are exposed.
+    pub adapter_filter: Dx12AdapterFilter,
 }
 
 impl Dx12BackendOptions {
@@ -574,6 +576,7 @@ impl Dx12BackendOptions {
             latency_waitable_object,
             force_shader_model: ForceShaderModelToken::default(),
             agility_sdk,
+            adapter_filter: Dx12AdapterFilter::default(),
         }
     }
 
@@ -595,6 +598,32 @@ impl Dx12BackendOptions {
             latency_waitable_object,
             force_shader_model: ForceShaderModelToken::default(),
             agility_sdk,
+            adapter_filter: self.adapter_filter,
+        }
+    }
+}
+
+/// Which adapters the DX12 backend exposes.
+///
+/// Exposing an adapter creates a device on it, which powers up a GPU that is asleep, such as the
+/// discrete GPU of a laptop with two GPUs.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Dx12AdapterFilter {
+    /// All adapters.
+    #[default]
+    All,
+    /// Only the adapters with these LUIDs (`DXGI_ADAPTER_DESC1::AdapterLuid`, as
+    /// `(HighPart << 32) | LowPart`).
+    Luids(Vec<u64>),
+}
+
+impl Dx12AdapterFilter {
+    /// Whether the adapter with this LUID is exposed.
+    #[must_use]
+    pub fn allows(&self, luid: u64) -> bool {
+        match self {
+            Self::All => true,
+            Self::Luids(luids) => luids.contains(&luid),
         }
     }
 }
@@ -1016,5 +1045,19 @@ impl GlFenceBehavior {
         } else {
             self
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dx12_adapter_filter() {
+        assert!(Dx12AdapterFilter::All.allows(7));
+        let filter = Dx12AdapterFilter::Luids(alloc::vec![7, 1 << 32]);
+        assert!(filter.allows(7));
+        assert!(filter.allows(1 << 32));
+        assert!(!filter.allows(8));
     }
 }

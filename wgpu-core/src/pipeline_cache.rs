@@ -233,6 +233,8 @@ fn adapter_key(adapter: &AdapterInfo) -> Result<[u8; 15], PipelineCacheValidatio
             ];
             Ok(adapter)
         }
+        // DX12 caches compiled shaders, which don't depend on the adapter.
+        wgt::Backend::Dx12 => Ok([255; 15]),
         _ => Err(PipelineCacheValidationError::Unsupported),
     }
 }

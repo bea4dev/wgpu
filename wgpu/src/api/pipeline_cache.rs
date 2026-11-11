@@ -63,6 +63,7 @@ use crate::*;
 ///
 /// This resource currently only works on the following backends:
 ///  - Vulkan
+///  - DX12, where it holds compiled shaders rather than driver pipelines
 ///
 /// This type is unique to the Rust API of `wgpu`.
 ///

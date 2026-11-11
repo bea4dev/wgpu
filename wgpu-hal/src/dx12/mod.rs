@@ -1338,6 +1338,24 @@ pub(super) struct ShaderCacheKey {
     shader_model: naga::back::hlsl::ShaderModel,
 }
 
+impl ShaderCacheKey {
+    /// A key for a [`PipelineCache`], which outlives the process: two hashes of what is compiled
+    /// and how.
+    fn persistent(&self, compiler: &str, debug: bool) -> [u8; 16] {
+        use core::hash::{Hash as _, Hasher as _};
+        let mut key = [0; 16];
+        for (seed, half) in key.chunks_exact_mut(8).enumerate() {
+            let mut h = std::hash::DefaultHasher::new();
+            seed.hash(&mut h);
+            self.hash(&mut h);
+            compiler.hash(&mut h);
+            debug.hash(&mut h);
+            half.copy_from_slice(&h.finish().to_le_bytes());
+        }
+        key
+    }
+}
+
 pub(super) struct ShaderCacheValue {
     /// This is the value of [`ShaderCache::nr_of_shaders_compiled`]
     /// at the time the cache entry was last used.
@@ -1353,6 +1371,11 @@ pub(super) enum CompiledShader {
 }
 
 impl CompiledShader {
+    fn bytes(&self) -> &[u8] {
+        let native = self.create_native_shader();
+        unsafe { core::slice::from_raw_parts(native.pShaderBytecode.cast(), native.BytecodeLength) }
+    }
+
     fn create_native_shader(&self) -> Direct3D12::D3D12_SHADER_BYTECODE {
         match self {
             CompiledShader::Dxc(shader) => Direct3D12::D3D12_SHADER_BYTECODE {
@@ -1400,10 +1423,60 @@ pub struct RayTracingPipeline {}
 
 impl crate::DynRayTracingPipeline for RayTracingPipeline {}
 
-#[derive(Debug)]
-pub struct PipelineCache;
+/// Compiled shaders by the hash of what was compiled, so that a later process can skip compiling
+/// them (see [`crate::Device::pipeline_cache_get_data`]).
+#[derive(Debug, Default)]
+pub struct PipelineCache {
+    shaders: Mutex<HashMap<[u8; 16], Vec<u8>>>,
+}
 
 impl crate::DynPipelineCache for PipelineCache {}
+
+impl PipelineCache {
+    /// What is kept at most, so that a cache saved and loaded again doesn't grow without bound.
+    const MAX_BYTES: usize = 64 << 20;
+
+    /// Reads what [`Self::to_data`] wrote: for each shader, its key, its length as a
+    /// little-endian `u32` and its bytes. What doesn't read whole is left out.
+    fn from_data(mut data: &[u8]) -> Self {
+        let mut shaders = HashMap::new();
+        while data.len() >= 20 {
+            let key: [u8; 16] = data[..16].try_into().unwrap();
+            let len = u32::from_le_bytes(data[16..20].try_into().unwrap()) as usize;
+            let Some(bytes) = data.get(20..20 + len) else {
+                break;
+            };
+            shaders.insert(key, bytes.to_vec());
+            data = &data[20 + len..];
+        }
+        Self {
+            shaders: Mutex::new(shaders),
+        }
+    }
+
+    fn to_data(&self) -> Vec<u8> {
+        let shaders = self.shaders.lock();
+        let mut out = Vec::with_capacity(shaders.values().map(|s| 20 + s.len()).sum());
+        for (key, bytes) in shaders.iter() {
+            out.extend_from_slice(key);
+            out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            out.extend_from_slice(bytes);
+        }
+        out
+    }
+
+    fn get(&self, key: &[u8; 16]) -> Option<Vec<u8>> {
+        self.shaders.lock().get(key).cloned()
+    }
+
+    fn insert(&self, key: [u8; 16], bytes: &[u8]) {
+        let mut shaders = self.shaders.lock();
+        let total: usize = shaders.values().map(|s| s.len()).sum();
+        if total + bytes.len() <= Self::MAX_BYTES {
+            shaders.insert(key, bytes.to_vec());
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct AccelerationStructure {
@@ -1905,4 +1978,22 @@ pub enum ShaderModel {
     V6_7,
     V6_8,
     V6_9,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PipelineCache;
+
+    #[test]
+    fn pipeline_cache_data_round_trips() {
+        let cache = PipelineCache::default();
+        cache.insert([1; 16], &[1, 2, 3]);
+        cache.insert([2; 16], &[]);
+        let data = cache.to_data();
+        let read = PipelineCache::from_data(&data);
+        assert_eq!(read.get(&[1; 16]), Some(alloc::vec![1, 2, 3]));
+        assert_eq!(read.get(&[2; 16]), Some(alloc::vec![]));
+        let cut = PipelineCache::from_data(&data[..data.len() - 1]);
+        assert_eq!(cut.shaders.lock().len(), 1);
+    }
 }
